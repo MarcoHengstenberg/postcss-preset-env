@@ -1,48 +1,64 @@
-// tooling
 const postcss = require('postcss');
-const plugin = require('..');
+const plugin  = require('..');
 
-// parse <style> after running its contents through a PostCSS plugin
-const updateStyle = style => {
-	postcss([
-		plugin({
-			stage: 0
-		})
-	]).process(style.textContent, {
-		from: style.className
-	}).then(
-		result => postcss().process(result.css, {
-			from: style.className
-		})
-	).then(
+// prepare a cache for <style> text with an incrementing id
+const css = {};
+let uuids = 0;
+
+// prepare the default plugin options
+const defaultOptions = { stage: 0 };
+
+// transform <style> source with a plugin
+const transformStyleElement = $style => {
+	// prepare a unique <style> identifier
+	if (!$style.className) {
+		$style.className = `pcss-style-${++uuids}`;
+	}
+
+	const from = $style.className.trim().replace(/\s+/, '.');
+
+	// prepare the plugin options
+	let pluginOptions;
+
+	try {
+		pluginOptions = JSON.parse($style.getAttribute('data-pcss-options'));
+	} catch (error) {
+		/* do nothing */
+	}
+
+	pluginOptions = pluginOptions || defaultOptions
+
+	// prepare the <style> source
+	const source = $style.textContent;
+	css[from] = from in css ? css[from] : source;
+
+	// transform the source
+	postcss([ plugin(pluginOptions) ]).process(source, { from })
+	// replace the <style> source with the transformed result
+	.then(
 		result => {
-			style.textContent = result.css;
+			if (css[from] !== result.css) {
+				$style.textContent = css[from] = result.css;
+			}
 		},
-		console.error
+		// otherwise, use a fallback and log the error
+		error => {
+			console.error(error);
+		}
 	);
-};
-
-// update any pre-existing <style> in <head> using the PostCSS plugin
-const styles = document.head.getElementsByTagName('style');
-
-if (styles.length) {
-	Array.prototype.filter.call(
-		styles,
-		node => node.nodeName === 'STYLE' && node.className === 'cp-pen-styles'
-	).concat(styles[0]).slice(0, 1).forEach(updateStyle);
 }
 
-// watch for and update any new <style> in <head> using the PostCSS plugin
+// transform <style> elements in the <head>
+const $styles = document.head.getElementsByTagName('style');
+
+Array.prototype.forEach.call($styles, transformStyleElement);
+
+// watch for and transform new <style> elements in <head>
 (new MutationObserver(
 	mutations => mutations.forEach(
 		mutation => Array.prototype.filter.call(
 			mutation.addedNodes || [],
-			node => node.nodeName === 'STYLE' && node.className === 'cp-pen-styles'
-		).forEach(updateStyle)
+			$node => $node.nodeName === 'STYLE'
+		).forEach(transformStyleElement)
 	)
-)).observe(
-	document.head,
-	{
-		childList: true
-	}
-);
+)).observe(document.documentElement, { childList: true, subtree: true });
